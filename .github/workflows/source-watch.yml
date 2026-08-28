@@ -28,11 +28,11 @@ jobs:
             '172915': '山坡地範圍圖(114)', '27744': '地質敏感區數值檔',
             '28708': '土壤液化潛勢圖', '129318': '地下水第一級管制區',
             '20821': '海岸地區範圍', '156197': '臺北市都市計畫使用分區圖',
-            '25787': '自來水水質水量保護區圖', '6377': '全國飲用水水源水質保護區範圍圖',
+            '25787': '自來水水質水量保護區圖',
             '25540': '野生動物保護區', '9932': '野生動物重要棲息環境', '9933': '自然保留區',
             '174421': '國家公園地理資訊圖層彙整', '129299': '中央管河川區域線',
-            '6384': '土壤污染管制區範圍圖',
           };
+          const MOENV_KEY = 'af57253c-e838-46da-a1f5-12b43afd75f3';
           const ENDPOINTS = [
             ['ep:tao', '桃園都計分區(ArcGIS)', 'https://urbandatasrv.tycg.gov.tw/server/rest/services/TY_UPGIS/TYMap_SDE/MapServer/2/query?where=1%3D1&returnCountOnly=true&f=json', 'arcgis'],
             ['ep:yun', '雲林都計分區(ArcGIS)', 'https://map.yunlin.gov.tw/arcgis/rest/services/YUNGIS/' + encodeURIComponent('都市計畫整合分區圖') + '/FeatureServer/0/query?where=1%3D1&returnCountOnly=true&f=json', 'arcgis'],
@@ -40,6 +40,8 @@ jobs:
             ['ep:hua', '花蓮都計分區(ArcGIS)', 'https://map.hl.gov.tw/arcgis/rest/services/UP/UP_ZONE_3857/MapServer/2/query?where=1%3D1&returnCountOnly=true&f=json', 'arcgis'],
             ['ep:mia', '苗栗都計分區(WFS)', 'https://urbanplan.miaoli.gov.tw/geoserver/ows?service=WFS&version=2.0.0&request=GetFeature&typeNames=MiaoliUrban:map_UrbanZoning&resultType=hits', 'wfs'],
             ['ep:liq', '全國土壤液化(ArcGIS)', 'https://gis.liquid.net.tw/arcgis/rest/services/P04032/Soil_cgs/MapServer/0/query?where=1%3D1&returnCountOnly=true&f=json', 'arcgis'],
+            ['ep:dw', '飲用水水源水質保護區(moenv 檔案)', `https://data.moenv.gov.tw/api/v2/gisepa_p_13?api_key=${MOENV_KEY}&limit=1&format=json`, 'moenv'],
+            ['ep:sp', '土壤污染管制區(moenv 檔案)', `https://data.moenv.gov.tw/api/v2/gisepa_p_25?api_key=${MOENV_KEY}&limit=1&format=json`, 'moenv'],
           ];
           const stateFile = '.source-state.json';
           const prev = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8')) : {};
@@ -60,9 +62,10 @@ jobs:
                 const t = await r.text();
                 let n = '';
                 if (kind === 'arcgis') { const j = JSON.parse(t); n = String(j.count ?? ''); }
+                else if (kind === 'moenv') { const j = JSON.parse(t); n = String((Array.isArray(j) && j[0] && j[0].upload_date) || ''); }
                 else { const m = t.match(/numberMatched="(\d+)"/); n = m ? m[1] : ''; }
                 cur[key] = n || prev[key] || '';
-                if (prev[key] && n && n !== prev[key]) news.push(`${name}: 圖斑筆數 ${prev[key]} → ${n}(端點資料有更新)`);
+                if (prev[key] && n && n !== prev[key]) news.push(`${name}: ${kind === 'moenv' ? '檔案版次' : '圖斑筆數'} ${prev[key]} → ${n}(端點資料有更新)`);
               } catch (e) { cur[key] = prev[key] || ''; }
             }
             fs.writeFileSync(stateFile, JSON.stringify(cur, null, 2));
