@@ -1,5 +1,6 @@
 name: source-watch
-# 每季 2 日檢查上游圖資(分區/編定/山坡地/地質敏感/液化/地下水/海岸/北市都計)是否釋出新版;有新版就開 issue 提醒重跑 GIS ETL
+# 每季 2 日檢查上游圖資是否釋出新版:①data.gov.tw 詮釋資料(16 個資料集) ②縣市都計 ArcGIS/WFS 端點筆數(桃雲苗彰花+全國液化)
+# 有變化就開 issue 提醒重跑 GIS ETL。另每年 4 月固定開「年度圖資巡檢」issue——年更源常以「另開新資料集」方式釋出,單一編號監看抓不到,靠年度總檢查兜底。
 on:
   schedule:
     - cron: '0 22 2 1,4,7,10 *'
@@ -17,26 +18,72 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: 檢查上游 metadata
+      - name: 檢查上游 metadata 與端點筆數
         id: check
         run: |
           node - <<'EOF'
           const fs = require('fs');
-          const DATASETS = { '169538': '非都市土地使用分區圖', '169539': '非都市土地使用地編定圖', '172915': '山坡地範圍圖(114)', '27744': '地質敏感區數值檔', '28708': '土壤液化潛勢圖', '129318': '地下水第一級管制區', '20821': '海岸地區範圍', '156197': '臺北市都市計畫使用分區圖' };
+          const DATASETS = {
+            '169538': '非都市土地使用分區圖', '169539': '非都市土地使用地編定圖',
+            '172915': '山坡地範圍圖(114)', '27744': '地質敏感區數值檔',
+            '28708': '土壤液化潛勢圖', '129318': '地下水第一級管制區',
+            '20821': '海岸地區範圍', '156197': '臺北市都市計畫使用分區圖',
+            '25787': '自來水水質水量保護區圖', '6377': '全國飲用水水源水質保護區範圍圖',
+            '25540': '野生動物保護區', '9932': '野生動物重要棲息環境', '9933': '自然保留區',
+            '174421': '國家公園地理資訊圖層彙整', '129299': '中央管河川區域線',
+            '6384': '土壤污染管制區範圍圖',
+          };
+          const ENDPOINTS = [
+            ['ep:tao', '桃園都計分區(ArcGIS)', 'https://urbandatasrv.tycg.gov.tw/server/rest/services/TY_UPGIS/TYMap_SDE/MapServer/2/query?where=1%3D1&returnCountOnly=true&f=json', 'arcgis'],
+            ['ep:yun', '雲林都計分區(ArcGIS)', 'https://map.yunlin.gov.tw/arcgis/rest/services/YUNGIS/' + encodeURIComponent('都市計畫整合分區圖') + '/FeatureServer/0/query?where=1%3D1&returnCountOnly=true&f=json', 'arcgis'],
+            ['ep:cha', '彰化都計分區(ArcGIS)', 'https://urbangis.chcg.gov.tw/arcgis/rest/services/CHCGMap/CITYPLANS/MapServer/19/query?where=1%3D1&returnCountOnly=true&f=json', 'arcgis'],
+            ['ep:hua', '花蓮都計分區(ArcGIS)', 'https://map.hl.gov.tw/arcgis/rest/services/UP/UP_ZONE_3857/MapServer/2/query?where=1%3D1&returnCountOnly=true&f=json', 'arcgis'],
+            ['ep:mia', '苗栗都計分區(WFS)', 'https://urbanplan.miaoli.gov.tw/geoserver/ows?service=WFS&version=2.0.0&request=GetFeature&typeNames=MiaoliUrban:map_UrbanZoning&resultType=hits', 'wfs'],
+            ['ep:liq', '全國土壤液化(ArcGIS)', 'https://gis.liquid.net.tw/arcgis/rest/services/P04032/Soil_cgs/MapServer/0/query?where=1%3D1&returnCountOnly=true&f=json', 'arcgis'],
+          ];
           const stateFile = '.source-state.json';
           const prev = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8')) : {};
+          const UA = { 'User-Agent': 'Mozilla/5.0' };
           (async () => {
             const cur = {}; const news = [];
             for (const [id, name] of Object.entries(DATASETS)) {
               try {
-                const r = await fetch(`https://data.gov.tw/api/v2/rest/dataset/${id}`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+                const r = await fetch(`https://data.gov.tw/api/v2/rest/dataset/${id}`, { headers: UA, signal: AbortSignal.timeout(30000) });
                 const d = (await r.json()).result || {};
-                cur[id] = d.metadataModified || d.modified || '';
+                cur[id] = d.modifiedDate || d.publishedDate || '';
                 if (prev[id] && cur[id] && cur[id] !== prev[id]) news.push(`${name}(${id}): ${prev[id]} → ${cur[id]}`);
               } catch (e) { cur[id] = prev[id] || ''; }
             }
+            for (const [key, name, url, kind] of ENDPOINTS) {
+              try {
+                const r = await fetch(url, { headers: UA, signal: AbortSignal.timeout(45000) });
+                const t = await r.text();
+                let n = '';
+                if (kind === 'arcgis') { const j = JSON.parse(t); n = String(j.count ?? ''); }
+                else { const m = t.match(/numberMatched="(\d+)"/); n = m ? m[1] : ''; }
+                cur[key] = n || prev[key] || '';
+                if (prev[key] && n && n !== prev[key]) news.push(`${name}: 圖斑筆數 ${prev[key]} → ${n}(端點資料有更新)`);
+              } catch (e) { cur[key] = prev[key] || ''; }
+            }
             fs.writeFileSync(stateFile, JSON.stringify(cur, null, 2));
             fs.writeFileSync('news.txt', news.join('\n'));
+            const isApril = new Date().getUTCMonth() === 3;
+            if (isApril) {
+              fs.writeFileSync('annual.txt', [
+                '每年 4 月年度圖資巡檢——「年更源」常以另開新資料集方式釋出,metadata 監看抓不到,請逐項確認最新年度版本:',
+                '',
+                '- [ ] 非都市土地使用分區圖/使用地編定圖(國土署):data.gov.tw 搜「非都市土地使用分區圖」看有無新年度資料集(現用 169538/169539=112年)→ 有新版重跑 build-zoning-blocks.mjs',
+                '- [ ] 山坡地範圍圖(農業部 data.moa J30,現用 114 年度;data.moa 擋 curl,用 PowerShell 下載)→ build-hazard-blocks2.mjs',
+                '- [ ] 土石流潛勢溪流影響範圍(農業部 data.moa I89,每年 3-5 月更新)→ build-hazard-blocks2.mjs',
+                '- [ ] 土壤液化潛勢(gis.liquid.net.tw P04032;端點筆數已自動監看,巡檢確認年度版次)',
+                '- [ ] 新北/臺中/高雄都市計畫圖資 zip(市府平台,無穩定監看點,手動確認版次)→ dl-uz-counties.mjs+ETL',
+                '- [ ] 地質敏感區(gsmma 27744,不定期公告新區)',
+                '- [ ] 生態三合一/國家公園/海岸(nid 已監看,巡檢確認)',
+                '- [ ] 重跑 ETL 後:gh release upload --clobber + WD-index hazards-index version 進版(快取殺手)',
+                '',
+                '免巡檢(全自動或即時):環保列管/實價/加油站 POI(每月 4 日)、公有土地(每月 5 日)、公告現值與宗地與國土利用現況(即時 API)。',
+              ].join('\n'));
+            }
             console.log(news.length ? news.join('\n') : '無新版');
           })();
           EOF
@@ -52,4 +99,11 @@ jobs:
         run: |
           if [ -s news.txt ]; then
             gh issue create --repo ${{ github.repository }} --title "上游圖資釋出新版,請重跑 GIS ETL" --body "$(cat news.txt)"
+          fi
+      - name: 年度巡檢(每年4月) → 開 issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -s annual.txt ]; then
+            gh issue create --repo ${{ github.repository }} --title "年度圖資巡檢:年更源總檢查" --body "$(cat annual.txt)"
           fi
