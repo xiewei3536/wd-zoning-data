@@ -1,0 +1,24 @@
+name: publand-refresh
+# 每月 5 日 05:30(台北)重建公有土地縣市包並覆寫 Release publand-v1(自家 GITHUB_TOKEN,零外部金鑰)
+on:
+  schedule:
+    - cron: '30 21 4 * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: 重建縣市包
+        run: node scripts/build-publand.mjs
+      - name: 覆寫 Release 資產
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload publand-v1 out/*.json --clobber --repo ${{ github.repository }}

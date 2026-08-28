@@ -1,0 +1,55 @@
+name: source-watch
+# 每季 2 日檢查上游圖資(分區/編定/山坡地/地質敏感)是否釋出新版;有新版就開 issue 提醒重跑 GIS ETL
+on:
+  schedule:
+    - cron: '0 22 2 1,4,7,10 *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: 檢查上游 metadata
+        id: check
+        run: |
+          node - <<'EOF'
+          const fs = require('fs');
+          const DATASETS = { '169538': '非都市土地使用分區圖', '169539': '非都市土地使用地編定圖', '172915': '山坡地範圍圖(114)', '27744': '地質敏感區數值檔' };
+          const stateFile = '.source-state.json';
+          const prev = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8')) : {};
+          (async () => {
+            const cur = {}; const news = [];
+            for (const [id, name] of Object.entries(DATASETS)) {
+              try {
+                const r = await fetch(`https://data.gov.tw/api/v2/rest/dataset/${id}`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+                const d = (await r.json()).result || {};
+                cur[id] = d.metadataModified || d.modified || '';
+                if (prev[id] && cur[id] && cur[id] !== prev[id]) news.push(`${name}(${id}): ${prev[id]} → ${cur[id]}`);
+              } catch (e) { cur[id] = prev[id] || ''; }
+            }
+            fs.writeFileSync(stateFile, JSON.stringify(cur, null, 2));
+            fs.writeFileSync('news.txt', news.join('\n'));
+            console.log(news.length ? news.join('\n') : '無新版');
+          })();
+          EOF
+      - name: 提交狀態
+        run: |
+          git config user.name "wd-data-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add .source-state.json
+          git diff --cached --quiet || (git commit -m "source-watch: 更新上游版本狀態" && git push)
+      - name: 有新版 → 開 issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -s news.txt ]; then
+            gh issue create --repo ${{ github.repository }} --title "上游圖資釋出新版,請重跑 GIS ETL" --body "$(cat news.txt)"
+          fi
