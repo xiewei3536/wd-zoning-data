@@ -1,5 +1,5 @@
 name: source-watch
-# 每季 2 日檢查上游圖資(分區/編定/山坡地/地質敏感)是否釋出新版;有新版就開 issue 提醒重跑 GIS ETL
+# 每季 2 日檢查上游圖資(分區/編定/山坡地/地質敏感/液化/地下水/海岸/北市都計)是否釋出新版;有新版就開 issue 提醒重跑 GIS ETL
 on:
   schedule:
     - cron: '0 22 2 1,4,7,10 *'
@@ -22,7 +22,7 @@ jobs:
         run: |
           node - <<'EOF'
           const fs = require('fs');
-          const DATASETS = { '169538': '非都市土地使用分區圖', '169539': '非都市土地使用地編定圖', '172915': '山坡地範圍圖(114)', '27744': '地質敏感區數值檔' };
+          const DATASETS = { '169538': '非都市土地使用分區圖', '169539': '非都市土地使用地編定圖', '172915': '山坡地範圍圖(114)', '27744': '地質敏感區數值檔', '28708': '土壤液化潛勢圖', '129318': '地下水第一級管制區', '20821': '海岸地區範圍', '156197': '臺北市都市計畫使用分區圖' };
           const stateFile = '.source-state.json';
           const prev = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8')) : {};
           (async () => {
